@@ -1,4 +1,13 @@
 # **Wav2Lip**: *Accurately Lip-syncing Videos In The Wild* 
+
+> ⚠️ **About this fork**  
+> This fork of [Wav2Lip](https://github.com/Rudrabha/Wav2Lip) aims to provide **modern GPU compatibility**, especially for newer cards like the NVIDIA RTX 40 series.  
+>  
+> The original repository uses outdated dependencies (such as an old version of Python and PyTorch), which causes runtime errors or CUDA incompatibilities on modern systems.  
+>  
+> ✅ This version updates critical components to run smoothly on contemporary hardware and environments.
+
+
 ### A commercial version of Wav2Lip can be directly accessed at https://sync.so
 Are you looking to integrate this into a product? We have a turn-key hosted API with new and improved lip-syncing models here: https://sync.so/
 For any other commercial / enterprise requests, please contact us at pavan@sync.so and prady@sync.so
@@ -27,7 +36,7 @@ This code is part of the paper: _A Lip Sync Expert Is All You Need for Speech to
 All results from this open-source code or our [demo website](https://bhaasha.iiit.ac.in/lipsync) should only be used for research/academic/personal purposes only. As the models are trained on the <a href="http://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrs2.html">LRS2 dataset</a>, any form of commercial use is strictly prohibited. For commercial requests please contact us directly!
 Prerequisites
 -------------
-- `Python 3.6` 
+- `Python 3.9` 
 - ffmpeg: `sudo apt-get install ffmpeg`
 - Install necessary packages using `pip install -r requirements.txt`. Alternatively, instructions for using a docker image is provided [here](https://gist.github.com/xenogenesi/e62d3d13dadbc164124c830e9c453668). Have a look at [this comment](https://github.com/Rudrabha/Wav2Lip/issues/131#issuecomment-725478562) and comment on [the gist](https://gist.github.com/xenogenesi/e62d3d13dadbc164124c830e9c453668) if you encounter any issues. 
 - Face detection [pre-trained model](https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth) should be downloaded to `face_detection/detection/sfd/s3fd.pth`. Alternative [link](https://iiitaphyd-my.sharepoint.com/:u:/g/personal/prajwal_k_research_iiit_ac_in/EZsy6qWuivtDnANIG73iHjIBjMSoojcIV0NULXV-yiuiIg?e=qTasa8) if the above does not work.

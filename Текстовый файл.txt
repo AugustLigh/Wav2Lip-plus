@@ -1,1 +1,0 @@
-python inference.py --checkpoint_path checkpoints/Wav2Lip-SD-NOGAN.pt --face "/home/avgust/Загрузки/250505_063328_610_733_73.mp4" --audio /home/avgust/Загрузки/ElevenLabs_2025-05-05T07_08_53_me_ivc_sp100_s50_sb75_se0_b_m2.mp3

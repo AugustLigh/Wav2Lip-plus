@@ -1,12 +1,38 @@
-from os import listdir, path
 import numpy as np
-import scipy, cv2, os, sys, argparse, audio
-import json, subprocess, random, string
+import cv2, os, argparse, audio, requests
+import subprocess
 from tqdm import tqdm
-from glob import glob
-import torch, face_detection
+import torch
 from models import Wav2Lip
 import platform
+from scrfd import SCRFD, Threshold
+from PIL import Image
+from pathlib import Path
+
+CHECKPOINTS_DIR = Path("./checkpoints")
+MODEL_NAME = "scrfd.onnx"
+MODEL_PATH = CHECKPOINTS_DIR / MODEL_NAME
+MODEL_URL = f"https://github.com/cospectrum/scrfd/raw/main/models/{MODEL_NAME}"
+
+def download_model_if_needed(model_path: Path, model_url: str):
+	if not model_path.exists():
+		print(f"Model not found at {model_path}. Downloading from {model_url}...")
+		model_path.parent.mkdir(parents=True, exist_ok=True)
+		try:
+			response = requests.get(model_url, stream=True)
+			response.raise_for_status()
+			with open(model_path, "wb") as f:
+				for chunk in response.iter_content(chunk_size=8192):
+					f.write(chunk)
+			print(f"Model downloaded successfully and saved to {model_path}")
+		except requests.exceptions.RequestException as e:
+			print(f"Error downloading model: {e}")
+			print(f"Please check the URL or download the model manually and place it in {model_path}")
+			return False
+	return True
+
+if not download_model_if_needed(MODEL_PATH, MODEL_URL):
+	exit("Failed to load model. Exiting.")
 
 parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
 
@@ -66,44 +92,45 @@ def get_smoothened_boxes(boxes, T):
 	return boxes
 
 def face_detect(images):
-	detector = face_detection.FaceAlignment(face_detection.LandmarksType._2D, 
-											flip_input=False, device=device)
-
-	batch_size = args.face_det_batch_size
+	detector = SCRFD.from_path(str(MODEL_PATH), providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+	threshold = Threshold(probability=0.5)
 	
-	while 1:
-		predictions = []
-		try:
-			for i in tqdm(range(0, len(images), batch_size)):
-				predictions.extend(detector.get_detections_for_batch(np.array(images[i:i + batch_size])))
-		except RuntimeError:
-			if batch_size == 1: 
-				raise RuntimeError('Image too big to run face detection on GPU. Please use the --resize_factor argument')
-			batch_size //= 2
-			print('Recovering from OOM error; New batch size: {}'.format(batch_size))
-			continue
-		break
-
 	results = []
 	pady1, pady2, padx1, padx2 = args.pads
-	for rect, image in zip(predictions, images):
-		if rect is None:
-			cv2.imwrite('temp/faulty_frame.jpg', image) # check this frame where the face was not detected.
-			raise ValueError('Face not detected! Ensure the video contains a face in all the frames.')
+	
+	for i, image in enumerate(tqdm(images, desc="Detecting faces with SCRFD")):
+		pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+		
+		faces = detector.detect(pil_image, threshold=threshold)
+		
+		if not faces:
+			debug_image_path = Path('temp') / f'faulty_frame_no_face_scrfd_{i}.jpg'
+			debug_image_path.parent.mkdir(parents=True, exist_ok=True)
+			cv2.imwrite(str(debug_image_path), image)
+			raise ValueError(f'Face not detected by SCRFD in frame {i}! Saved to {debug_image_path}. Ensure the video contains a face in all the frames.')
+		best_face = max(faces, key=lambda face: face.probability) if len(faces) > 1 else faces[0]
+		
+		x1 = float(best_face.bbox.upper_left.x)
+		y1 = float(best_face.bbox.upper_left.y)
+		x2 = float(best_face.bbox.lower_right.x)
+		y2 = float(best_face.bbox.lower_right.y)
 
-		y1 = max(0, rect[1] - pady1)
-		y2 = min(image.shape[0], rect[3] + pady2)
-		x1 = max(0, rect[0] - padx1)
-		x2 = min(image.shape[1], rect[2] + padx2)
+		y1 = max(0, y1 - pady1)
+		y2 = min(image.shape[0], y2 + pady2)
+		x1 = max(0, x1 - padx1)
+		x2 = min(image.shape[1], x2 + padx2)
 		
 		results.append([x1, y1, x2, y2])
-
+	
 	boxes = np.array(results)
-	if not args.nosmooth: boxes = get_smoothened_boxes(boxes, T=5)
-	results = [[image[y1: y2, x1:x2], (y1, y2, x1, x2)] for image, (x1, y1, x2, y2) in zip(images, boxes)]
+	if not args.nosmooth: 
+		boxes = get_smoothened_boxes(boxes, T=5)
 
+	results = [[image[int(y1): int(y2), int(x1):int(x2)], (y1, y2, x1, x2)] for image, (x1, y1, x2, y2) in zip(images, boxes)]
+		
 	del detector
-	return results 
+	return results
+
 
 def datagen(frames, mels):
 	img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
@@ -159,11 +186,10 @@ print('Using {} for inference.'.format(device))
 
 def _load(checkpoint_path):
 	if device == 'cuda':
-		checkpoint = torch.load(checkpoint_path, weights_only=False)
+		checkpoint = torch.jit.load(checkpoint_path)
 	else:
-		checkpoint = torch.load(checkpoint_path,
-								map_location=lambda storage, loc: storage,
-								weights_only=False)
+		checkpoint = torch.jit.load(checkpoint_path,
+								map_location=lambda storage, loc: storage)
 	return checkpoint
 
 def load_model(path):
@@ -280,7 +306,19 @@ def main():
 		
 		for p, f, c in zip(pred, frames, coords):
 			y1, y2, x1, x2 = c
-			p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
+			 # Убедимся, что координаты являются целыми числами
+			y1, y2, x1, x2 = int(y1), int(y2), int(x1), int(x2)
+			
+			# Ensure target dimensions are integers for cv2.resize
+			target_w = x2 - x1
+			target_h = y2 - y1
+
+			# Add a check for positive dimensions to prevent further errors
+			if target_w > 0 and target_h > 0:
+				p = cv2.resize(p.astype(np.uint8), (target_w, target_h))
+			else:
+				# Handle cases where dimensions might be non-positive
+				pass # p remains as is if resize is skipped
 
 			f[y1:y2, x1:x2] = p
 			out.write(f)
